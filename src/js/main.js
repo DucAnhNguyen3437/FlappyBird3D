@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Bird } from './bird.js';
 import { PipePair } from './pipe.js'; 
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
+import { PowerUp, POWERUP_TYPES } from './powerup.js';
 
 const hitSound = new Audio('./assets/sounds/low-metal-hit-2-81779.mp3');
 const scene = new THREE.Scene();
@@ -47,6 +48,36 @@ let pipesStarted = false;
 let pipesDelayTimer = 0;
 const pipesStartDelay = 3; // delay 3 giây trước khi pipe chạy
 
+let immune = false;
+let immuneTimer = 0;
+let speedModifier = 1;
+let speedTimer = 0;
+
+const powerUps = [];
+
+function spawnPowerUp() {
+  // Nếu đã có power up đang active thì không spawn mới
+  if (powerUps.some(pu => pu.active)) return;
+
+  if (!pipes.length) return;
+  const nextPipe = pipes.find(pipe => pipe.centerX > bird.model.position.x && pipe.loaded);
+  if (!nextPipe) return;
+  const typeArr = [POWERUP_TYPES.IMMUNE, POWERUP_TYPES.SPEED_UP, POWERUP_TYPES.SLOW_DOWN];
+  const type = typeArr[Math.floor(Math.random() * typeArr.length)];
+  const pos = new THREE.Vector3(
+    nextPipe.centerX,
+    nextPipe.gapCenterY,
+    0
+  );
+  const powerUp = new PowerUp(scene, type, pos);
+  powerUp.pipe = nextPipe;
+  powerUps.push(powerUp);
+}
+
+// setInterval(() => {
+//   if (gameStarted && pipesStarted) spawnPowerUp();
+// }, 5000); // 5 giây 1 lần
+
 function checkCollision() {
   if (!bird.model) return false;
   const birdBox = new THREE.Box3().setFromObject(bird.model);
@@ -60,6 +91,11 @@ function checkCollision() {
       const upperBox = new THREE.Box3().setFromObject(pipeGroup.upperPipes[pipeIndex]);
 
       if (birdBox.intersectsBox(lowerBox) || birdBox.intersectsBox(upperBox)) {
+        if (immune) {
+          immune = false;
+          immuneTimer = 0;
+          return false; // Không chết, chỉ mất hiệu ứng miễn nhiễm
+        }
         return true;
       }
     }
@@ -72,6 +108,13 @@ function checkScore(){
     if(pipe.position.x < bird.position.x && !pipe.scored){
       pipe.scored = true;
       score++;
+      pipesPassed++; // tăng số pipe đã vượt qua
+      // Spawn power up nếu đủ số pipe
+      if (pipesPassed >= pipesToNextPowerUp) {
+        spawnPowerUp();
+        pipesPassed = 0;
+        pipesToNextPowerUp = getRandomPipeCount();
+      }
       console.log('Điểm: ' + score);
     }
   });
@@ -119,6 +162,14 @@ window.addEventListener('click', ()=>{
 
 const clock = new THREE.Clock();
 
+let pipesPassed = 0;
+let pipesToNextPowerUp = getRandomPipeCount();
+let pipeSpeed = 0.1; // tốc độ ban đầu
+
+function getRandomPipeCount() {
+  return Math.floor(Math.random() * 6) + 5; // 5 đến 10
+}
+
 function animate() {
   requestAnimationFrame(animate);
 
@@ -135,7 +186,7 @@ function animate() {
     }
 
     if (pipesStarted) {
-      pipes.forEach(pipe => pipe.update(0.05));
+      pipes.forEach(pipe => pipe.update(pipeSpeed * speedModifier));
       checkScore();
 
       if (checkCollision()) {
@@ -144,8 +195,55 @@ function animate() {
         alert('Game Over! Điểm: ' + score);
         resetGame();
       }
+      // Tăng tốc độ dần
+      pipeSpeed += 0.0001; // điều chỉnh giá trị này nếu muốn tăng nhanh/chậm hơn
     }
   }
+
+  // Xoay power up cho dễ nhìn
+powerUps.forEach(pu => {
+  if (pu.active && pu.pipe && pu.pipe.loaded) {
+    pu.mesh.position.x = pu.pipe.centerX;
+    pu.mesh.position.y = pu.pipe.gapCenterY;
+    pu.mesh.position.z = 0;
+  }
+  if (pu.active) pu.mesh.rotation.y += 0.05;
+});
+
+// Kiểm tra va chạm với chim
+if (bird.model) {
+  const birdBox = new THREE.Box3().setFromObject(bird.model);
+  powerUps.forEach(pu => {
+    if (!pu.active) return;
+    const puBox = new THREE.Box3().setFromObject(pu.mesh);
+    if (birdBox.intersectsBox(puBox)) {
+      // Áp dụng hiệu ứng
+      if (pu.type === POWERUP_TYPES.IMMUNE) {
+        immune = true;
+        immuneTimer = 5; // miễn nhiễm 5 giây
+      }
+      if (pu.type === POWERUP_TYPES.SPEED_UP) {
+        speedModifier = 1.5;
+        speedTimer = 5; // tăng tốc 5 giây
+      }
+      if (pu.type === POWERUP_TYPES.SLOW_DOWN) {
+        speedModifier = 0.5;
+        speedTimer = 5; // giảm tốc 5 giây
+      }
+      pu.remove(scene);
+    }
+  });
+}
+
+// Giảm thời gian hiệu ứng
+if (immuneTimer > 0) {
+  immuneTimer -= 1/60;
+  if (immuneTimer <= 0) immune = false;
+}
+if (speedTimer > 0) {
+  speedTimer -= 1/60;
+  if (speedTimer <= 0) speedModifier = 1;
+}
 
   controls.update();
   renderer.render(scene, camera);
@@ -267,6 +365,5 @@ function togglePause() {
     console.log('Game tạm dừng');
   } else {
     pauseBtn.innerText = 'Pause';
-    console.log('Game tiếp tục');
-  }
+  } console.log('Game tiếp tục');
 }
